@@ -6,7 +6,7 @@ from pathlib import Path
 from datetime import date, datetime
 import altair as alt
 
-APP_TITLE = "2026 年間研修管理システム Ver1.1"
+APP_TITLE = "2026 年間研修管理システム Ver1.2 修正版"
 DB_PATH = Path("training_management.db")
 
 TRAINING_MASTER = [
@@ -30,6 +30,18 @@ st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 def connect_db():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
+
+
+def table_columns(conn, table_name):
+    cur = conn.cursor()
+    cur.execute(f"PRAGMA table_info({table_name})")
+    return [row[1] for row in cur.fetchall()]
+
+
+def add_column_if_missing(conn, table_name, column_name, column_type):
+    cols = table_columns(conn, table_name)
+    if column_name not in cols:
+        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
 
 
 def init_db():
@@ -62,16 +74,34 @@ def init_db():
     cur.execute("""
     CREATE TABLE IF NOT EXISTS training_schedule (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        scheduled_date TEXT NOT NULL,
-        theme TEXT NOT NULL,
+        scheduled_date TEXT,
+        theme TEXT,
         staff TEXT,
         place TEXT,
         target_staff TEXT,
         memo TEXT,
-        status TEXT NOT NULL DEFAULT '予定',
-        created_at TEXT NOT NULL
+        status TEXT DEFAULT '予定',
+        created_at TEXT
     )
     """)
+
+    # 旧バージョンDBが残っていても落ちないように列を補修
+    add_column_if_missing(conn, "training_schedule", "scheduled_date", "TEXT")
+    add_column_if_missing(conn, "training_schedule", "theme", "TEXT")
+    add_column_if_missing(conn, "training_schedule", "staff", "TEXT")
+    add_column_if_missing(conn, "training_schedule", "place", "TEXT")
+    add_column_if_missing(conn, "training_schedule", "target_staff", "TEXT")
+    add_column_if_missing(conn, "training_schedule", "memo", "TEXT")
+    add_column_if_missing(conn, "training_schedule", "status", "TEXT DEFAULT '予定'")
+    add_column_if_missing(conn, "training_schedule", "created_at", "TEXT")
+
+    add_column_if_missing(conn, "training_records", "training_date", "TEXT")
+    add_column_if_missing(conn, "training_records", "theme", "TEXT")
+    add_column_if_missing(conn, "training_records", "staff", "TEXT")
+    add_column_if_missing(conn, "training_records", "participants", "TEXT")
+    add_column_if_missing(conn, "training_records", "record_link", "TEXT")
+    add_column_if_missing(conn, "training_records", "memo", "TEXT")
+    add_column_if_missing(conn, "training_records", "created_at", "TEXT")
 
     for theme, committee, frequency, required_count in TRAINING_MASTER:
         cur.execute("""
@@ -114,7 +144,7 @@ def progress_df():
     plan = get_plan()
     records = get_records()
 
-    if records.empty:
+    if records.empty or "theme" not in records.columns:
         counts = pd.DataFrame(columns=["theme", "done_count"])
     else:
         counts = records.groupby("theme").size().reset_index(name="done_count")
@@ -134,7 +164,11 @@ def progress_df():
 
 
 def month_label(d):
-    dt = pd.to_datetime(d)
+    if not d:
+        return ""
+    dt = pd.to_datetime(d, errors="coerce")
+    if pd.isna(dt):
+        return ""
     return f"{dt.month}月"
 
 
@@ -145,34 +179,42 @@ def fiscal_month_order(month_text):
 
 def schedule_calendar_df():
     schedule = get_schedule()
-    records = get_records()
 
+    output_cols = ["月", "予定日", "研修テーマ", "担当者", "場所", "対象者", "状態", "メモ"]
     if schedule.empty:
-        return pd.DataFrame(columns=["月", "予定日", "研修テーマ", "担当者", "場所", "対象者", "状態", "メモ"])
+        return pd.DataFrame(columns=output_cols)
+
+    # 必要列がない旧DBでも落ちないように補完
+    for col in ["scheduled_date", "theme", "staff", "place", "target_staff", "status", "memo"]:
+        if col not in schedule.columns:
+            schedule[col] = ""
 
     df = schedule.copy()
-    df["予定日"] = pd.to_datetime(df["scheduled_date"])
-    df["月"] = df["予定日"].dt.month.astype(str) + "月"
-    df["予定日"] = df["予定日"].dt.strftime("%Y-%m-%d")
+    df["scheduled_dt"] = pd.to_datetime(df["scheduled_date"], errors="coerce")
+    df = df.dropna(subset=["scheduled_dt"])
+
+    if df.empty:
+        return pd.DataFrame(columns=output_cols)
+
+    df["月"] = df["scheduled_dt"].dt.month.astype(str) + "月"
+    df["予定日"] = df["scheduled_dt"].dt.strftime("%Y-%m-%d")
     df["月順"] = df["月"].apply(fiscal_month_order)
 
-    # 実施記録が同一研修名で予定日以降にある場合は「実施済み候補」として表示
-    if not records.empty:
-        done_themes = set(records["theme"].tolist())
-        df["状態"] = df.apply(
-            lambda r: "済（記録あり）" if r["theme"] in done_themes and r["status"] != "中止" else r["status"],
-            axis=1
-        )
-
-    df = df.sort_values(["月順", "予定日", "id"])
     df = df.rename(columns={
         "theme": "研修テーマ",
         "staff": "担当者",
         "place": "場所",
         "target_staff": "対象者",
+        "status": "状態",
         "memo": "メモ"
     })
-    return df[["月", "予定日", "研修テーマ", "担当者", "場所", "対象者", "状態", "メモ"]]
+
+    for col in output_cols:
+        if col not in df.columns:
+            df[col] = ""
+
+    df = df.sort_values(["月順", "予定日", "研修テーマ"])
+    return df[output_cols]
 
 
 init_db()
@@ -209,18 +251,19 @@ if menu == "管理者ダッシュボード":
     c3.metric("年間実施率", f"{total_rate:.0%}")
     c4.metric("未実施・不足項目", int((df["done_count"] < df["required_count"]).sum()))
 
-    if not schedule.empty:
+    if not schedule.empty and "scheduled_date" in schedule.columns:
         st.subheader("直近の研修予定")
-        schedule["scheduled_dt"] = pd.to_datetime(schedule["scheduled_date"])
-        upcoming = schedule[schedule["scheduled_dt"] >= pd.Timestamp.today().normalize()].sort_values("scheduled_dt").head(5)
+        schedule["scheduled_dt"] = pd.to_datetime(schedule["scheduled_date"], errors="coerce")
+        upcoming = schedule.dropna(subset=["scheduled_dt"])
+        upcoming = upcoming[upcoming["scheduled_dt"] >= pd.Timestamp.today().normalize()].sort_values("scheduled_dt").head(5)
         if upcoming.empty:
             st.info("今後の研修予定は登録されていません。")
         else:
-            st.dataframe(
-                upcoming[["scheduled_date", "theme", "staff", "place", "target_staff", "status", "memo"]],
-                use_container_width=True,
-                hide_index=True
-            )
+            show_cols = ["scheduled_date", "theme", "staff", "place", "target_staff", "status", "memo"]
+            for col in show_cols:
+                if col not in upcoming.columns:
+                    upcoming[col] = ""
+            st.dataframe(upcoming[show_cols], use_container_width=True, hide_index=True)
 
     st.subheader("研修進捗一覧")
     view = df[["theme", "committee", "frequency", "required_count", "done_count", "remaining", "rate", "状況"]].copy()
@@ -300,11 +343,12 @@ elif menu == "年間実施予定カレンダー":
     if schedule.empty:
         st.info("更新・削除できる予定はまだありません。")
     else:
-        st.dataframe(
-            schedule[["id", "scheduled_date", "theme", "staff", "place", "target_staff", "status", "memo"]],
-            use_container_width=True,
-            hide_index=True
-        )
+        show_cols = ["id", "scheduled_date", "theme", "staff", "place", "target_staff", "status", "memo"]
+        for col in show_cols:
+            if col not in schedule.columns:
+                schedule[col] = ""
+        st.dataframe(schedule[show_cols], use_container_width=True, hide_index=True)
+
         target_id = st.number_input("対象ID", min_value=1, step=1, key="schedule_id")
         selected = schedule[schedule["id"] == target_id]
 
@@ -313,12 +357,16 @@ elif menu == "年間実施予定カレンダー":
         else:
             row = selected.iloc[0]
             with st.form("edit_schedule"):
-                new_date = st.date_input("予定日", value=pd.to_datetime(row["scheduled_date"]).date(), key="edit_schedule_date")
+                default_date = pd.to_datetime(row["scheduled_date"], errors="coerce")
+                if pd.isna(default_date):
+                    default_date = pd.Timestamp.today()
+                new_date = st.date_input("予定日", value=default_date.date(), key="edit_schedule_date")
                 new_theme = st.selectbox("研修テーマ", themes, index=themes.index(row["theme"]) if row["theme"] in themes else 0)
                 new_staff = st.text_input("担当者", value=row["staff"] or "")
                 new_place = st.text_input("場所・実施方法", value=row["place"] or "")
                 new_target = st.text_input("対象者", value=row["target_staff"] or "")
-                new_status = st.selectbox("状態", ["予定", "延期", "中止", "実施待ち"], index=["予定", "延期", "中止", "実施待ち"].index(row["status"]) if row["status"] in ["予定", "延期", "中止", "実施待ち"] else 0)
+                status_options = ["予定", "延期", "中止", "実施待ち"]
+                new_status = st.selectbox("状態", status_options, index=status_options.index(row["status"]) if row["status"] in status_options else 0)
                 new_memo = st.text_area("メモ", value=row["memo"] or "")
 
                 col1, col2 = st.columns(2)
@@ -506,4 +554,4 @@ elif menu == "Excel出力":
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-st.caption("Ver1.1：SQLite保存・年間実施予定カレンダー・検索更新削除・実施率自動計算・Excel出力対応")
+st.caption("Ver1.2：旧DB補修対応・年間実施予定カレンダー・検索更新削除・実施率自動計算・Excel出力対応")
