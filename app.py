@@ -6,7 +6,7 @@ from pathlib import Path
 from datetime import date, datetime
 import altair as alt
 
-APP_TITLE = "2026 年間研修管理システム Ver1.0"
+APP_TITLE = "2026 年間研修管理システム Ver1.1"
 DB_PATH = Path("training_management.db")
 
 TRAINING_MASTER = [
@@ -59,6 +59,20 @@ def init_db():
     )
     """)
 
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS training_schedule (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        scheduled_date TEXT NOT NULL,
+        theme TEXT NOT NULL,
+        staff TEXT,
+        place TEXT,
+        target_staff TEXT,
+        memo TEXT,
+        status TEXT NOT NULL DEFAULT '予定',
+        created_at TEXT NOT NULL
+    )
+    """)
+
     for theme, committee, frequency, required_count in TRAINING_MASTER:
         cur.execute("""
         INSERT OR IGNORE INTO training_plan(theme, committee, frequency, required_count)
@@ -92,6 +106,10 @@ def get_records():
     return read_sql("SELECT * FROM training_records ORDER BY training_date DESC, id DESC")
 
 
+def get_schedule():
+    return read_sql("SELECT * FROM training_schedule ORDER BY scheduled_date ASC, id ASC")
+
+
 def progress_df():
     plan = get_plan()
     records = get_records()
@@ -120,6 +138,43 @@ def month_label(d):
     return f"{dt.month}月"
 
 
+def fiscal_month_order(month_text):
+    order = {m: i for i, m in enumerate(MONTHS, start=1)}
+    return order.get(month_text, 99)
+
+
+def schedule_calendar_df():
+    schedule = get_schedule()
+    records = get_records()
+
+    if schedule.empty:
+        return pd.DataFrame(columns=["月", "予定日", "研修テーマ", "担当者", "場所", "対象者", "状態", "メモ"])
+
+    df = schedule.copy()
+    df["予定日"] = pd.to_datetime(df["scheduled_date"])
+    df["月"] = df["予定日"].dt.month.astype(str) + "月"
+    df["予定日"] = df["予定日"].dt.strftime("%Y-%m-%d")
+    df["月順"] = df["月"].apply(fiscal_month_order)
+
+    # 実施記録が同一研修名で予定日以降にある場合は「実施済み候補」として表示
+    if not records.empty:
+        done_themes = set(records["theme"].tolist())
+        df["状態"] = df.apply(
+            lambda r: "済（記録あり）" if r["theme"] in done_themes and r["status"] != "中止" else r["status"],
+            axis=1
+        )
+
+    df = df.sort_values(["月順", "予定日", "id"])
+    df = df.rename(columns={
+        "theme": "研修テーマ",
+        "staff": "担当者",
+        "place": "場所",
+        "target_staff": "対象者",
+        "memo": "メモ"
+    })
+    return df[["月", "予定日", "研修テーマ", "担当者", "場所", "対象者", "状態", "メモ"]]
+
+
 init_db()
 
 st.title(APP_TITLE)
@@ -129,6 +184,7 @@ menu = st.sidebar.radio(
     "メニュー",
     [
         "管理者ダッシュボード",
+        "年間実施予定カレンダー",
         "研修実施入力",
         "研修記録一覧・更新削除",
         "研修計画管理",
@@ -141,6 +197,7 @@ if menu == "管理者ダッシュボード":
 
     df = progress_df()
     records = get_records()
+    schedule = get_schedule()
 
     total_required = int(df["required_count"].sum()) if not df.empty else 0
     total_done = int(df["done_count"].sum()) if not df.empty else 0
@@ -151,6 +208,19 @@ if menu == "管理者ダッシュボード":
     c2.metric("実施済み回数", total_done)
     c3.metric("年間実施率", f"{total_rate:.0%}")
     c4.metric("未実施・不足項目", int((df["done_count"] < df["required_count"]).sum()))
+
+    if not schedule.empty:
+        st.subheader("直近の研修予定")
+        schedule["scheduled_dt"] = pd.to_datetime(schedule["scheduled_date"])
+        upcoming = schedule[schedule["scheduled_dt"] >= pd.Timestamp.today().normalize()].sort_values("scheduled_dt").head(5)
+        if upcoming.empty:
+            st.info("今後の研修予定は登録されていません。")
+        else:
+            st.dataframe(
+                upcoming[["scheduled_date", "theme", "staff", "place", "target_staff", "status", "memo"]],
+                use_container_width=True,
+                hide_index=True
+            )
 
     st.subheader("研修進捗一覧")
     view = df[["theme", "committee", "frequency", "required_count", "done_count", "remaining", "rate", "状況"]].copy()
@@ -177,17 +247,95 @@ if menu == "管理者ダッシュボード":
     )
     st.altair_chart(chart, use_container_width=True)
 
-    st.subheader("今月の実施記録")
-    if records.empty:
-        st.info("まだ研修記録がありません。")
+elif menu == "年間実施予定カレンダー":
+    st.header("年間実施予定カレンダー")
+    st.caption("研修予定を月別に登録・確認できます。実施後は「研修実施入力」に記録してください。")
+
+    plan = get_plan()
+    themes = plan["theme"].tolist()
+
+    st.subheader("予定を登録")
+    with st.form("schedule_form"):
+        scheduled_date = st.date_input("予定日", value=date.today())
+        theme = st.selectbox("研修テーマ", themes)
+        staff = st.text_input("担当者")
+        place = st.text_input("場所・実施方法", placeholder="例：事務室／オンライン／フロア会議")
+        target_staff = st.text_input("対象者", placeholder="例：全職員／夜勤者／新規採用者")
+        status = st.selectbox("状態", ["予定", "延期", "中止", "実施待ち"])
+        memo = st.text_area("メモ")
+        submitted = st.form_submit_button("予定を登録する")
+
+    if submitted:
+        execute_sql("""
+        INSERT INTO training_schedule(scheduled_date, theme, staff, place, target_staff, memo, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            scheduled_date.isoformat(),
+            theme,
+            staff,
+            place,
+            target_staff,
+            memo,
+            status,
+            datetime.now().isoformat(timespec="seconds")
+        ))
+        st.success("研修予定を登録しました。")
+
+    st.subheader("月別カレンダー")
+    cal = schedule_calendar_df()
+
+    if cal.empty:
+        st.info("まだ研修予定が登録されていません。")
     else:
-        now_month = f"{datetime.now().month}月"
-        records["月"] = records["training_date"].apply(month_label)
-        this_month = records[records["月"] == now_month]
-        if this_month.empty:
-            st.warning(f"{now_month}の実施記録はまだありません。")
+        selected_months = st.multiselect("表示する月", MONTHS, default=MONTHS)
+        show = cal[cal["月"].isin(selected_months)].copy()
+        for m in MONTHS:
+            month_df = show[show["月"] == m]
+            if not month_df.empty:
+                with st.expander(f"{m} の予定", expanded=True):
+                    st.dataframe(month_df.drop(columns=["月"]), use_container_width=True, hide_index=True)
+
+    st.subheader("予定の更新・削除")
+    schedule = get_schedule()
+    if schedule.empty:
+        st.info("更新・削除できる予定はまだありません。")
+    else:
+        st.dataframe(
+            schedule[["id", "scheduled_date", "theme", "staff", "place", "target_staff", "status", "memo"]],
+            use_container_width=True,
+            hide_index=True
+        )
+        target_id = st.number_input("対象ID", min_value=1, step=1, key="schedule_id")
+        selected = schedule[schedule["id"] == target_id]
+
+        if selected.empty:
+            st.info("上の一覧から更新・削除したいIDを入力してください。")
         else:
-            st.dataframe(this_month[["training_date", "theme", "staff", "participants", "record_link", "memo"]], use_container_width=True, hide_index=True)
+            row = selected.iloc[0]
+            with st.form("edit_schedule"):
+                new_date = st.date_input("予定日", value=pd.to_datetime(row["scheduled_date"]).date(), key="edit_schedule_date")
+                new_theme = st.selectbox("研修テーマ", themes, index=themes.index(row["theme"]) if row["theme"] in themes else 0)
+                new_staff = st.text_input("担当者", value=row["staff"] or "")
+                new_place = st.text_input("場所・実施方法", value=row["place"] or "")
+                new_target = st.text_input("対象者", value=row["target_staff"] or "")
+                new_status = st.selectbox("状態", ["予定", "延期", "中止", "実施待ち"], index=["予定", "延期", "中止", "実施待ち"].index(row["status"]) if row["status"] in ["予定", "延期", "中止", "実施待ち"] else 0)
+                new_memo = st.text_area("メモ", value=row["memo"] or "")
+
+                col1, col2 = st.columns(2)
+                update_btn = col1.form_submit_button("更新する")
+                delete_btn = col2.form_submit_button("削除する")
+
+            if update_btn:
+                execute_sql("""
+                UPDATE training_schedule
+                SET scheduled_date=?, theme=?, staff=?, place=?, target_staff=?, status=?, memo=?
+                WHERE id=?
+                """, (new_date.isoformat(), new_theme, new_staff, new_place, new_target, new_status, new_memo, int(target_id)))
+                st.success("予定を更新しました。")
+
+            if delete_btn:
+                execute_sql("DELETE FROM training_schedule WHERE id=?", (int(target_id),))
+                st.warning("予定を削除しました。")
 
 elif menu == "研修実施入力":
     st.header("研修実施入力")
@@ -276,11 +424,11 @@ elif menu == "研修記録一覧・更新削除":
                 SET training_date=?, theme=?, staff=?, participants=?, record_link=?, memo=?
                 WHERE id=?
                 """, (new_date.isoformat(), new_theme, new_staff, new_participants, new_link, new_memo, int(record_id)))
-                st.success("更新しました。画面を再読み込みしてください。")
+                st.success("更新しました。")
 
             if delete_btn:
                 execute_sql("DELETE FROM training_records WHERE id=?", (int(record_id),))
-                st.warning("削除しました。画面を再読み込みしてください。")
+                st.warning("削除しました。")
 
 elif menu == "研修計画管理":
     st.header("研修計画管理")
@@ -342,10 +490,12 @@ elif menu == "Excel出力":
 
     df = progress_df()
     records = get_records()
+    schedule = get_schedule()
 
     output = Path("training_export.xlsx")
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, sheet_name="進捗一覧", index=False)
+        schedule.to_excel(writer, sheet_name="年間実施予定", index=False)
         records.to_excel(writer, sheet_name="研修記録", index=False)
 
     with open(output, "rb") as f:
@@ -356,4 +506,4 @@ elif menu == "Excel出力":
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-st.caption("Ver1.0：SQLite保存・検索更新削除・実施率自動計算・Excel出力対応")
+st.caption("Ver1.1：SQLite保存・年間実施予定カレンダー・検索更新削除・実施率自動計算・Excel出力対応")
