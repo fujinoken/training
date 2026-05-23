@@ -7,8 +7,12 @@ import altair as alt
 import shutil
 import zipfile
 import re
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
+from openpyxl.utils import get_column_letter
 
-APP_TITLE = "2026 年間研修管理システム Ver1.6 監査ファイル・研修レポート添付対応版"
+
+APP_TITLE = "2026 年間研修管理システム Ver1.7 監査ファイル・A4年間カレンダー対応版"
 DB_PATH = Path("training_management.db")
 UPLOAD_DIR = Path("training_uploads")
 CASE_DIR = UPLOAD_DIR / "case_materials"
@@ -434,6 +438,211 @@ def audit_checklist_df():
     return pd.DataFrame(rows)
 
 
+
+def format_japanese_date(date_text, month_text=""):
+    """予定日を短く表示する。日付がなければ月のみ。"""
+    dt = pd.to_datetime(date_text, errors="coerce")
+    if pd.isna(dt):
+        return str(month_text or "")
+    return f"{dt.month}/{dt.day}"
+
+
+def create_printable_annual_calendar_excel():
+    """A4横1枚印刷を想定した年間研修スケジュールExcelを作成する。"""
+    output = AUDIT_DIR / f"A4年間研修スケジュール_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+
+    plan = get_plan()
+    schedule = get_schedule()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "A4年間スケジュール"
+
+    # Page setup: A4 landscape, fit to one page
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 1
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_margins.left = 0.25
+    ws.page_margins.right = 0.25
+    ws.page_margins.top = 0.35
+    ws.page_margins.bottom = 0.35
+    ws.page_margins.header = 0.1
+    ws.page_margins.footer = 0.1
+
+    title_fill = PatternFill("solid", fgColor="D9EAD3")
+    header_fill = PatternFill("solid", fgColor="EAF4E2")
+    month_fill = PatternFill("solid", fgColor="DDEBF7")
+    done_fill = PatternFill("solid", fgColor="D9EAD3")
+    warn_fill = PatternFill("solid", fgColor="FCE4D6")
+    plan_fill = PatternFill("solid", fgColor="FFF2CC")
+    thin = Side(style="thin", color="B7B7B7")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    # Title
+    ws.merge_cells("A1:P1")
+    ws["A1"] = "年間研修実施予定カレンダー（A4印刷用）"
+    ws["A1"].font = Font(size=18, bold=True, color="1F4E79")
+    ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+    ws["A1"].fill = title_fill
+    ws.row_dimensions[1].height = 28
+
+    ws.merge_cells("A2:P2")
+    ws["A2"] = "4月〜翌3月の研修予定を1枚で確認できます。予定変更・実施状況はシステム上で更新してください。"
+    ws["A2"].font = Font(size=9, color="666666")
+    ws["A2"].alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[2].height = 18
+
+    headers = ["研修テーマ", "委員会", "必要"] + MONTHS + ["進捗"]
+    for col_idx, h in enumerate(headers, start=1):
+        cell = ws.cell(row=3, column=col_idx, value=h)
+        cell.font = Font(size=9, bold=True, color="1F1F1F")
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.fill = month_fill if h in MONTHS else header_fill
+        cell.border = border
+
+    # Build schedule mapping
+    sched_map = {}
+    if not schedule.empty:
+        for _, row in schedule.iterrows():
+            theme = str(row.get("theme", "") or "").strip()
+            month = get_row_month(row)
+            if not theme or month not in MONTHS:
+                continue
+            status = str(row.get("status", "予定") or "予定")
+            date_short = format_japanese_date(row.get("scheduled_date", ""), month)
+            staff = str(row.get("staff", "") or "").strip()
+            text = f"{date_short}\n{status}"
+            if staff:
+                text += f"\n{staff}"
+            sched_map.setdefault((theme, month), []).append(text)
+
+    progress = progress_df()
+    progress_map = {}
+    if not progress.empty:
+        for _, r in progress.iterrows():
+            progress_map[str(r["theme"])] = f'{int(r["done_count"])}/{int(r["required_count"])}'
+
+    start_row = 4
+    for r_idx, (_, p) in enumerate(plan.iterrows(), start=start_row):
+        theme = str(p["theme"])
+        values = [theme, str(p.get("committee", "") or ""), int(p.get("required_count", 0))]
+        for m in MONTHS:
+            values.append("\n---\n".join(sched_map.get((theme, m), [])))
+        values.append(progress_map.get(theme, f'0/{int(p.get("required_count", 0))}'))
+
+        for c_idx, v in enumerate(values, start=1):
+            cell = ws.cell(row=r_idx, column=c_idx, value=v)
+            cell.border = border
+            cell.alignment = Alignment(horizontal="center" if c_idx >= 3 else "left", vertical="center", wrap_text=True)
+            cell.font = Font(size=8 if c_idx >= 4 else 9)
+            if c_idx >= 4 and c_idx <= 15 and str(v).strip():
+                cell.fill = done_fill if "実施済" in str(v) else plan_fill
+            if c_idx == 16:
+                if str(v).split("/")[0] == str(v).split("/")[-1]:
+                    cell.fill = done_fill
+                else:
+                    cell.fill = warn_fill
+
+        ws.row_dimensions[r_idx].height = 42
+
+    last_row = start_row + len(plan) - 1
+
+    # Bottom legend
+    legend_row = last_row + 2
+    ws.merge_cells(start_row=legend_row, start_column=1, end_row=legend_row, end_column=16)
+    ws.cell(legend_row, 1).value = "色の見方：黄色＝予定　緑＝実施済　赤系＝不足確認　　※A4横1枚印刷用に、文字は小さめに設定しています。"
+    ws.cell(legend_row, 1).font = Font(size=9, color="666666")
+    ws.cell(legend_row, 1).alignment = Alignment(horizontal="center")
+    ws.cell(legend_row, 1).fill = PatternFill("solid", fgColor="F8F8F8")
+
+    widths = {
+        1: 18, 2: 14, 3: 6, 16: 7
+    }
+    for col in range(1, 17):
+        ws.column_dimensions[get_column_letter(col)].width = widths.get(col, 8.5)
+
+    ws.freeze_panes = "D4"
+    ws.print_area = f"A1:P{legend_row}"
+    ws.sheet_view.showGridLines = False
+
+    wb.save(output)
+    return output
+
+
+def schedule_edit_ui(schedule, themes, key_prefix="schedule_edit"):
+    """予定の変更・更新・削除を共通表示する。"""
+    if schedule.empty:
+        st.info("更新・削除できる予定はまだありません。")
+        return
+
+    list_df = schedule_list_df()
+    st.dataframe(list_df, use_container_width=True, hide_index=True)
+
+    options = []
+    for _, r in list_df.iterrows():
+        label = f'ID{r["id"]}｜{r["月"]}｜{r["予定日"]}｜{r["研修テーマ"]}｜{r["状態"]}'
+        options.append((label, int(r["id"])))
+
+    selected_label = st.selectbox(
+        "変更・更新する予定を選択",
+        [x[0] for x in options],
+        key=f"{key_prefix}_select"
+    )
+    target_id = dict(options)[selected_label]
+    selected = schedule[schedule["id"] == target_id]
+
+    if selected.empty:
+        st.info("予定が見つかりません。")
+        return
+
+    row = selected.iloc[0]
+    with st.form(f"{key_prefix}_form"):
+        default_month = get_row_month(row)
+        if default_month not in MONTHS:
+            default_month = "4月"
+
+        new_month = st.selectbox("予定月", MONTHS, index=MONTHS.index(default_month), key=f"{key_prefix}_month")
+        has_date = bool(str(row.get("scheduled_date", "") or "").strip())
+        use_date_edit = st.checkbox("具体的な予定日も入力する", value=has_date, key=f"{key_prefix}_use_date")
+
+        new_date = ""
+        if use_date_edit:
+            default_date = pd.to_datetime(row.get("scheduled_date", ""), errors="coerce")
+            if pd.isna(default_date):
+                year = 2026 if MONTH_NUM[new_month] >= 4 else 2027
+                default_date = pd.Timestamp(date(year, MONTH_NUM[new_month], 1))
+            new_date = st.date_input("予定日", value=default_date.date(), key=f"{key_prefix}_date").isoformat()
+
+        current_theme = str(row.get("theme", "") or "")
+        new_theme = st.selectbox("研修テーマ", themes, index=themes.index(current_theme) if current_theme in themes else 0, key=f"{key_prefix}_theme")
+        new_staff = st.text_input("担当者", value=row.get("staff", "") or "", key=f"{key_prefix}_staff")
+        new_place = st.text_input("場所・実施方法", value=row.get("place", "") or "", key=f"{key_prefix}_place")
+        new_target = st.text_input("対象者", value=row.get("target_staff", "") or "", key=f"{key_prefix}_target")
+
+        status_options = ["予定", "延期", "中止", "実施待ち", "実施済"]
+        current_status = str(row.get("status", "") or "予定")
+        new_status = st.selectbox("状態", status_options, index=status_options.index(current_status) if current_status in status_options else 0, key=f"{key_prefix}_status")
+        new_memo = st.text_area("メモ", value=row.get("memo", "") or "", key=f"{key_prefix}_memo")
+
+        col1, col2 = st.columns(2)
+        update_btn = col1.form_submit_button("更新する")
+        delete_btn = col2.form_submit_button("削除する")
+
+    if update_btn:
+        execute_sql("""
+        UPDATE training_schedule
+        SET scheduled_date=?, scheduled_month=?, theme=?, staff=?, place=?, target_staff=?, status=?, memo=?
+        WHERE id=?
+        """, (new_date, new_month, new_theme, new_staff, new_place, new_target, new_status, new_memo, int(target_id)))
+        st.success("予定を更新しました。画面を再読み込みするとカレンダーに反映されます。")
+
+    if delete_btn:
+        execute_sql("DELETE FROM training_schedule WHERE id=?", (int(target_id),))
+        st.warning("予定を削除しました。画面を再読み込みするとカレンダーに反映されます。")
+
+
 def create_audit_excel():
     output = AUDIT_DIR / f"監査ファイル_年間研修管理_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
 
@@ -446,18 +655,21 @@ def create_audit_excel():
         progress_df().to_excel(writer, sheet_name="03_進捗一覧", index=False)
         records.to_excel(writer, sheet_name="04_研修実施記録", index=False)
         audit_checklist_df().to_excel(writer, sheet_name="05_監査チェックリスト", index=False)
-        attachments_summary_df().to_excel(writer, sheet_name="06_添付状況一覧", index=False)
-        attachments.to_excel(writer, sheet_name="07_添付ファイル台帳", index=False)
+        monthly_schedule_matrix().to_excel(writer, sheet_name="06_年間予定_一覧形式", index=False)
+        attachments_summary_df().to_excel(writer, sheet_name="07_添付状況一覧", index=False)
+        attachments.to_excel(writer, sheet_name="08_添付ファイル台帳", index=False)
 
     return output
 
 
 def create_audit_zip():
     excel_path = create_audit_excel()
+    printable_path = create_printable_annual_calendar_excel()
     zip_path = AUDIT_DIR / f"監査ファイル一式_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
 
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
         z.write(excel_path, arcname=excel_path.name)
+        z.write(printable_path, arcname=printable_path.name)
 
         for folder in [CASE_DIR, REPORT_DIR, UPLOAD_DIR / "others"]:
             if folder.exists():
@@ -478,6 +690,7 @@ menu = st.sidebar.radio(
     [
         "管理者ダッシュボード",
         "年間実施予定カレンダー",
+        "A4年間スケジュール印刷",
         "おすすめスケジュール登録",
         "研修予定登録",
         "研修実施入力・資料添付",
@@ -542,10 +755,10 @@ if menu == "管理者ダッシュボード":
 
 elif menu == "年間実施予定カレンダー":
     st.header("年間実施予定カレンダー")
-    st.caption("研修テーマごとに、4月〜翌3月の予定を横並びで確認できます。")
+    st.caption("研修テーマごとに、4月〜翌3月の予定を横並びで確認できます。予定の変更・更新もこの画面で行えます。")
 
     matrix = monthly_schedule_matrix()
-    st.dataframe(matrix, use_container_width=True, hide_index=True, height=540)
+    st.dataframe(matrix, use_container_width=True, hide_index=True, height=500)
 
     st.subheader("月別の予定一覧")
     selected_month = st.selectbox("表示する月", MONTHS)
@@ -556,6 +769,30 @@ elif menu == "年間実施予定カレンダー":
         st.info(f"{selected_month}の予定はまだ登録されていません。")
     else:
         st.dataframe(month_df, use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.subheader("予定の変更・更新・削除")
+    st.caption("下の一覧から予定を選択して、月・日付・研修テーマ・担当者・状態などを変更できます。")
+    plan = get_plan()
+    themes = plan["theme"].tolist()
+    schedule_edit_ui(get_schedule(), themes, key_prefix="calendar_edit")
+
+elif menu == "A4年間スケジュール印刷":
+    st.header("A4年間スケジュール印刷")
+    st.caption("A4横1枚で印刷しやすい年間研修スケジュールExcelを作成します。")
+
+    st.subheader("印刷イメージ用データ")
+    st.dataframe(monthly_schedule_matrix(), use_container_width=True, hide_index=True, height=420)
+
+    if st.button("A4年間スケジュールExcelを作成する"):
+        output = create_printable_annual_calendar_excel()
+        with open(output, "rb") as f:
+            st.download_button(
+                label="A4年間スケジュールExcelをダウンロード",
+                data=f,
+                file_name=output.name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
 elif menu == "おすすめスケジュール登録":
     st.header("6月開始おすすめスケジュール登録")
@@ -802,7 +1039,7 @@ elif menu == "監査ファイル自動生成":
     st.subheader("監査チェックリスト")
     st.dataframe(audit_checklist_df(), use_container_width=True, hide_index=True)
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         if st.button("監査用Excelを作成する"):
@@ -826,7 +1063,18 @@ elif menu == "監査ファイル自動生成":
                     mime="application/zip"
                 )
 
-    st.info("ZIPには監査用Excelと、保存済みの事例資料・職員レポート等の添付ファイルが含まれます。")
+    with col3:
+        if st.button("A4年間スケジュールを作成する"):
+            output = create_printable_annual_calendar_excel()
+            with open(output, "rb") as f:
+                st.download_button(
+                    label="A4年間スケジュールをダウンロード",
+                    data=f,
+                    file_name=output.name,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
+    st.info("ZIPには監査用Excel、A4年間スケジュール、保存済みの事例資料・職員レポート等の添付ファイルが含まれます。")
 
 elif menu == "研修計画管理":
     st.header("研修計画管理")
@@ -845,6 +1093,7 @@ elif menu == "Excel出力":
         attachments_summary_df().to_excel(writer, sheet_name="添付状況一覧", index=False)
         get_attachments().to_excel(writer, sheet_name="添付ファイル台帳", index=False)
         audit_checklist_df().to_excel(writer, sheet_name="監査チェックリスト", index=False)
+        monthly_schedule_matrix().to_excel(writer, sheet_name="A4予定表用データ", index=False)
 
     with open(output, "rb") as f:
         st.download_button(
@@ -854,4 +1103,4 @@ elif menu == "Excel出力":
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-st.caption("Ver1.6：研修レポート添付・使用事例保存・コメント保存・監査ファイル自動生成対応版。")
+st.caption("Ver1.7：年間実施予定カレンダー画面での予定変更・更新、A4横1枚の年間スケジュール印刷Excelに対応。")
