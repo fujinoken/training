@@ -1,12 +1,12 @@
-
 import streamlit as st
 import pandas as pd
 import sqlite3
 from pathlib import Path
 from datetime import date, datetime
+from io import BytesIO
 import altair as alt
 
-APP_TITLE = "2026 年間研修管理システム Ver1.4 安定版"
+APP_TITLE = "2026 年間研修管理システム Ver1.5 監査ファイル自動生成型"
 DB_PATH = Path("training_management.db")
 
 TRAINING_MASTER = [
@@ -25,6 +25,62 @@ TRAINING_MASTER = [
 
 MONTHS = ["4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月", "1月", "2月", "3月"]
 MONTH_NUM = {"4月":4, "5月":5, "6月":6, "7月":7, "8月":8, "9月":9, "10月":10, "11月":11, "12月":12, "1月":1, "2月":2, "3月":3}
+FISCAL_YEAR = 2026
+
+# 6月開始を想定した効率重視スケジュール。
+# 委員会・監査重要項目・季節性を考慮し、1か月2〜3件程度に分散。
+RECOMMENDED_SCHEDULE = [
+    ("2026-06-10", "6月", "感染症の予防", "感染対策委員会と同日", "会議室", "全職員", "夏前に感染対策を確認。手洗い・標準予防策・嘔吐物対応を確認。"),
+    ("2026-06-24", "6月", "事故防止", "管理者", "フロア会議", "全職員", "転倒・誤薬・ヒヤリハットの共有。事故報告書との連動を確認。"),
+    ("2026-06-28", "6月", "運営推進会議", "管理者", "施設内", "参加者", "年度開始後の運営状況共有。"),
+
+    ("2026-07-08", "7月", "身体拘束適正化", "身体拘束委員会と同日", "会議室", "全職員", "身体拘束に該当する行為、三原則、記録の必要性を確認。"),
+    ("2026-07-22", "7月", "虐待防止", "虐待防止委員会と同日", "会議室", "全職員", "不適切ケア・スピーチロック・通報相談体制を確認。"),
+
+    ("2026-08-12", "8月", "業務継続計画（感染症）", "管理者", "会議室", "全職員", "感染症発生時の役割分担、連絡、ゾーニングを確認。"),
+    ("2026-08-26", "8月", "ハラスメント防止", "管理者", "フロア会議", "全職員", "職員間・利用者家族対応・相談窓口を確認。"),
+    ("2026-08-28", "8月", "運営推進会議", "管理者", "施設内", "参加者", "夏季の運営状況共有。"),
+
+    ("2026-09-09", "9月", "身体拘束適正化", "身体拘束委員会と同日", "会議室", "全職員", "事例検討。見守り・声かけ・環境調整で代替できる支援を確認。"),
+    ("2026-09-23", "9月", "認知症専門ケア研修", "管理者", "フロア会議", "全職員", "認知症の方への声かけ、安心を作る関わりを確認。"),
+
+    ("2026-10-07", "10月", "虐待防止", "虐待防止委員会と同日", "会議室", "全職員", "不適切ケアの早期発見、記録、相談ルートを確認。"),
+    ("2026-10-21", "10月", "避難訓練", "防火管理者", "施設内", "全職員・利用者", "秋の避難訓練。夜間想定や誘導手順も確認。"),
+    ("2026-10-28", "10月", "運営推進会議", "管理者", "施設内", "参加者", "上半期の運営状況共有。"),
+
+    ("2026-11-11", "11月", "身体拘束適正化", "身体拘束委員会と同日", "会議室", "全職員", "身体拘束廃止に向けたチーム対応を確認。"),
+    ("2026-11-25", "11月", "事故防止", "管理者", "フロア会議", "全職員", "冬場の転倒、夜間事故、服薬確認を中心に振り返り。"),
+
+    ("2026-12-09", "12月", "感染症の予防", "感染対策委員会と同日", "会議室", "全職員", "冬季感染症、換気、面会対応、発熱時対応を確認。"),
+    ("2026-12-23", "12月", "業務継続計画（自然災害）", "管理者", "会議室", "全職員", "地震・風水害時の初動、備蓄、連絡体制を確認。"),
+    ("2026-12-28", "12月", "運営推進会議", "管理者", "施設内", "参加者", "年末時点の運営状況共有。"),
+
+    ("2027-01-13", "1月", "虐待防止", "虐待防止委員会と同日", "会議室", "全職員", "年末年始後の疲労・不適切ケア防止を確認。"),
+    ("2027-01-20", "1月", "認知症専門ケア研修", "管理者", "フロア会議", "全職員", "BPSDへの対応、本人の不安を増やさない関わりを確認。"),
+    ("2027-01-27", "1月", "ハラスメント防止", "管理者", "フロア会議", "全職員", "相談しやすい職場づくり、対応記録、管理者報告を確認。"),
+
+    ("2027-02-10", "2月", "身体拘束適正化", "身体拘束委員会と同日", "会議室", "全職員", "年度末前の最終確認。記録・議事録の不足確認。"),
+    ("2027-02-17", "2月", "業務継続計画（感染症）", "管理者", "会議室", "全職員", "感染症BCPの訓練・振り返り。役割分担の再確認。"),
+    ("2027-02-24", "2月", "避難訓練", "防火管理者", "施設内", "全職員・利用者", "年度内2回目の避難訓練。記録写真・参加者記録を保存。"),
+    ("2027-02-28", "2月", "運営推進会議", "管理者", "施設内", "参加者", "年度末前の運営状況共有。"),
+
+    ("2027-03-03", "3月", "虐待防止", "虐待防止委員会と同日", "会議室", "全職員", "年度最終確認。未受講者・新入職員への補講確認。"),
+    ("2027-03-10", "3月", "業務継続計画（自然災害）", "管理者", "会議室", "全職員", "自然災害BCPの訓練・振り返り。備蓄と連絡網を確認。"),
+    ("2027-03-17", "3月", "看取り", "管理者", "フロア会議", "全職員", "看取り期の本人・家族支援、記録、医療連携を確認。"),
+    ("2027-03-24", "3月", "運営推進会議", "管理者", "施設内", "参加者", "年度まとめと次年度課題共有。"),
+]
+
+AUDIT_CHECK_ITEMS = [
+    ("年間研修計画表", "研修テーマ・頻度・実施予定月が確認できること"),
+    ("研修実施記録", "実施日・テーマ・担当者・参加者・内容が記録されていること"),
+    ("参加者一覧", "誰が受講したか確認できること"),
+    ("研修資料", "使用した資料・レジュメ・動画URL等が残っていること"),
+    ("委員会議事録", "感染・身体拘束・虐待など委員会と連動していること"),
+    ("未実施・不足確認表", "必要回数に対する不足が見えること"),
+    ("補講・未受講者対応", "欠席者がいた場合の対応が確認できること"),
+    ("BCP訓練記録", "感染症・自然災害の訓練または振り返りが確認できること"),
+    ("避難訓練記録", "訓練日・参加者・想定・課題が確認できること"),
+]
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
@@ -67,6 +123,11 @@ def init_db():
         participants TEXT,
         record_link TEXT,
         memo TEXT,
+        evidence_status TEXT DEFAULT '未確認',
+        material_link TEXT,
+        photo_link TEXT,
+        committee_minutes_link TEXT,
+        absent_follow TEXT,
         created_at TEXT
     )
     """)
@@ -105,6 +166,11 @@ def init_db():
             ("participants", "TEXT"),
             ("record_link", "TEXT"),
             ("memo", "TEXT"),
+            ("evidence_status", "TEXT DEFAULT '未確認'"),
+            ("material_link", "TEXT"),
+            ("photo_link", "TEXT"),
+            ("committee_minutes_link", "TEXT"),
+            ("absent_follow", "TEXT"),
             ("created_at", "TEXT"),
         ],
     }.items():
@@ -116,6 +182,11 @@ def init_db():
         INSERT OR IGNORE INTO training_plan(theme, committee, frequency, required_count)
         VALUES (?, ?, ?, ?)
         """, (theme, committee, frequency, required_count))
+        cur.execute("""
+        UPDATE training_plan
+        SET committee=?, frequency=?, required_count=?
+        WHERE theme=?
+        """, (committee, frequency, required_count, theme))
 
     conn.commit()
     conn.close()
@@ -170,7 +241,9 @@ def progress_df():
     if records.empty or "theme" not in records.columns:
         counts = pd.DataFrame(columns=["theme", "done_count"])
     else:
-        counts = records.groupby("theme").size().reset_index(name="done_count")
+        valid_records = records.copy()
+        valid_records = valid_records[valid_records["theme"].notna()]
+        counts = valid_records.groupby("theme").size().reset_index(name="done_count")
 
     df = plan.merge(counts, on="theme", how="left")
     df["done_count"] = df["done_count"].fillna(0).astype(int)
@@ -203,7 +276,6 @@ def monthly_schedule_matrix():
 
         if month not in MONTHS or theme == "":
             continue
-
         if theme not in matrix["研修テーマ"].values:
             continue
 
@@ -212,7 +284,6 @@ def monthly_schedule_matrix():
         status_text = str(row.get("status", "予定") or "予定").strip()
         staff_text = str(row.get("staff", "") or "").strip()
         staff_text = f"／{staff_text}" if staff_text else ""
-
         entry = f"{day_text} {status_text}{staff_text}".strip()
 
         idx = matrix.index[matrix["研修テーマ"] == theme][0]
@@ -257,19 +328,205 @@ def schedule_list_df():
     return df.sort_values(["月順", "予定日", "研修テーマ"])[cols]
 
 
+def records_for_display():
+    records = get_records()
+    if records.empty:
+        return pd.DataFrame(columns=["id", "実施日", "研修テーマ", "担当者", "参加者", "根拠確認", "研修記録リンク", "資料リンク", "写真リンク", "委員会議事録", "欠席者対応", "メモ"])
+    df = records.copy()
+    df = df.rename(columns={
+        "training_date": "実施日",
+        "theme": "研修テーマ",
+        "staff": "担当者",
+        "participants": "参加者",
+        "record_link": "研修記録リンク",
+        "memo": "メモ",
+        "evidence_status": "根拠確認",
+        "material_link": "資料リンク",
+        "photo_link": "写真リンク",
+        "committee_minutes_link": "委員会議事録",
+        "absent_follow": "欠席者対応",
+    })
+    cols = ["id", "実施日", "研修テーマ", "担当者", "参加者", "根拠確認", "研修記録リンク", "資料リンク", "写真リンク", "委員会議事録", "欠席者対応", "メモ"]
+    for c in cols:
+        if c not in df.columns:
+            df[c] = ""
+    return df[cols]
+
+
+def audit_check_df():
+    progress = progress_df()
+    records = get_records()
+    schedule = get_schedule()
+
+    rows = []
+    rows.append(["年間研修計画", "年間予定表", "作成済" if not schedule.empty else "未作成", "6月開始スケジュールを登録すると監査説明がしやすくなります。"])
+    rows.append(["研修実施状況", "実施記録", "作成済" if not records.empty else "未実施", "実施日に参加者・資料・写真・議事録リンクを保存します。"])
+
+    for _, r in progress.iterrows():
+        status = "完了" if int(r["remaining"]) == 0 else "不足"
+        note = f"必要{int(r['required_count'])}回／実施{int(r['done_count'])}回／残り{int(r['remaining'])}回"
+        rows.append([str(r["theme"]), "必要回数チェック", status, note])
+
+    if not records.empty:
+        for _, r in records.iterrows():
+            theme = str(r.get("theme", "") or "")
+            evidence = str(r.get("evidence_status", "") or "未確認")
+            missing = []
+            if not str(r.get("participants", "") or "").strip():
+                missing.append("参加者")
+            if not str(r.get("record_link", "") or "").strip():
+                missing.append("研修記録")
+            if not str(r.get("material_link", "") or "").strip():
+                missing.append("資料")
+            rows.append([theme, "証拠書類チェック", evidence, "不足：" + "・".join(missing) if missing else "主要項目入力済み"])
+
+    return pd.DataFrame(rows, columns=["項目", "確認対象", "状態", "メモ"])
+
+
+def seed_recommended_schedule(overwrite=False):
+    conn = connect_db()
+    cur = conn.cursor()
+    inserted = 0
+    skipped = 0
+
+    if overwrite:
+        cur.execute("DELETE FROM training_schedule")
+
+    for scheduled_date, scheduled_month, theme, staff, place, target_staff, memo in RECOMMENDED_SCHEDULE:
+        if not overwrite:
+            cur.execute("""
+            SELECT COUNT(*) FROM training_schedule
+            WHERE scheduled_date=? AND theme=?
+            """, (scheduled_date, theme))
+            exists = cur.fetchone()[0] > 0
+            if exists:
+                skipped += 1
+                continue
+        cur.execute("""
+        INSERT INTO training_schedule(scheduled_date, scheduled_month, theme, staff, place, target_staff, memo, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (scheduled_date, scheduled_month, theme, staff, place, target_staff, memo, "予定", datetime.now().isoformat(timespec="seconds")))
+        inserted += 1
+
+    conn.commit()
+    conn.close()
+    return inserted, skipped
+
+
+def update_schedule_status_after_record(theme, training_date):
+    month = f"{pd.to_datetime(training_date).month}月"
+    execute_sql("""
+    UPDATE training_schedule
+    SET status='実施済'
+    WHERE theme=? AND scheduled_month=? AND status IN ('予定', '実施待ち')
+    """, (theme, month))
+
+
+def theme_ledger_df(theme):
+    schedule = schedule_list_df()
+    records = records_for_display()
+
+    s = schedule[schedule["研修テーマ"] == theme].copy() if not schedule.empty else pd.DataFrame()
+    r = records[records["研修テーマ"] == theme].copy() if not records.empty else pd.DataFrame()
+
+    rows = []
+    for _, row in s.iterrows():
+        rows.append({
+            "区分": "予定",
+            "日付": row.get("予定日", ""),
+            "月": row.get("月", ""),
+            "担当者": row.get("担当者", ""),
+            "対象者/参加者": row.get("対象者", ""),
+            "状態": row.get("状態", ""),
+            "根拠リンク": "",
+            "メモ": row.get("メモ", ""),
+        })
+    for _, row in r.iterrows():
+        rows.append({
+            "区分": "実施",
+            "日付": row.get("実施日", ""),
+            "月": f"{pd.to_datetime(row.get('実施日'), errors='coerce').month}月" if not pd.isna(pd.to_datetime(row.get('実施日'), errors='coerce')) else "",
+            "担当者": row.get("担当者", ""),
+            "対象者/参加者": row.get("参加者", ""),
+            "状態": row.get("根拠確認", ""),
+            "根拠リンク": row.get("研修記録リンク", ""),
+            "メモ": row.get("メモ", ""),
+        })
+    return pd.DataFrame(rows)
+
+
+def create_audit_excel():
+    buffer = BytesIO()
+    progress = progress_df()
+    records = records_for_display()
+    schedule = schedule_list_df()
+    matrix = monthly_schedule_matrix()
+    check = audit_check_df()
+
+    cover = pd.DataFrame([
+        ["帳票名", "年間研修 監査確認ファイル"],
+        ["対象年度", "2026年度（2026年4月〜2027年3月）"],
+        ["作成日時", datetime.now().strftime("%Y-%m-%d %H:%M")],
+        ["説明", "年間予定・実施記録・不足確認・証拠書類チェックをまとめた監査確認用ファイルです。"],
+        ["運用方針", "研修実施日に、参加者・資料・写真・議事録リンクまで入力することで、年度末の確認負担を減らします。"],
+    ], columns=["項目", "内容"])
+
+    shortage = progress[["theme", "committee", "frequency", "required_count", "done_count", "remaining", "状況"]].copy()
+    shortage.columns = ["研修テーマ", "委員会", "頻度", "必要回数", "実施数", "不足回数", "状況"]
+
+    checklist = pd.DataFrame(AUDIT_CHECK_ITEMS, columns=["監査確認書類", "確認ポイント"])
+    checklist["保管状況"] = "□ 済　□ 未"
+    checklist["備考"] = ""
+
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        cover.to_excel(writer, sheet_name="表紙", index=False)
+        matrix.to_excel(writer, sheet_name="年間予定表", index=False)
+        schedule.to_excel(writer, sheet_name="予定一覧", index=False)
+        records.to_excel(writer, sheet_name="実施記録", index=False)
+        shortage.to_excel(writer, sheet_name="不足確認", index=False)
+        check.to_excel(writer, sheet_name="監査確認", index=False)
+        checklist.to_excel(writer, sheet_name="提出書類チェック", index=False)
+
+        for theme, *_ in TRAINING_MASTER:
+            sheet_name = theme.replace("（", "").replace("）", "")[:28]
+            ledger = theme_ledger_df(theme)
+            if ledger.empty:
+                ledger = pd.DataFrame(columns=["区分", "日付", "月", "担当者", "対象者/参加者", "状態", "根拠リンク", "メモ"])
+            ledger.to_excel(writer, sheet_name=sheet_name, index=False)
+
+        wb = writer.book
+        for ws in wb.worksheets:
+            ws.freeze_panes = "A2"
+            for col in ws.columns:
+                max_len = 0
+                col_letter = col[0].column_letter
+                for cell in col:
+                    text = str(cell.value) if cell.value is not None else ""
+                    max_len = max(max_len, min(len(text), 60))
+                ws.column_dimensions[col_letter].width = max(12, min(max_len + 2, 45))
+            for row in ws.iter_rows():
+                for cell in row:
+                    cell.alignment = cell.alignment.copy(wrap_text=True, vertical="top")
+
+    buffer.seek(0)
+    return buffer
+
+
 init_db()
 
 st.title(APP_TITLE)
-st.caption("年間研修を、4月〜翌3月の月単位で予定管理できます。")
+st.caption("年間研修を予定登録・実施記録・監査確認ファイルまで一括管理します。")
 
 menu = st.sidebar.radio(
     "メニュー",
     [
         "管理者ダッシュボード",
+        "6月開始おすすめスケジュール",
         "年間実施予定カレンダー",
         "研修予定登録",
         "研修実施入力",
         "研修記録一覧・更新削除",
+        "監査ファイル自動生成",
         "研修計画管理",
         "Excel出力"
     ]
@@ -288,6 +545,13 @@ if menu == "管理者ダッシュボード":
     c2.metric("実施済み回数", total_done)
     c3.metric("年間実施率", f"{total_rate:.0%}")
     c4.metric("未実施・不足項目", int((df["done_count"] < df["required_count"]).sum()))
+
+    if total_rate < 0.5:
+        st.warning("年度途中の場合は問題ありません。月ごとに実施して、実施日に記録と根拠資料リンクを入力してください。")
+    elif total_rate < 1.0:
+        st.info("実施済み項目が増えています。不足確認から残り回数を確認してください。")
+    else:
+        st.success("必要回数は満たしています。監査ファイルで根拠書類の不足を確認してください。")
 
     st.subheader("年間実施予定（月単位）")
     st.dataframe(monthly_schedule_matrix(), use_container_width=True, hide_index=True, height=420)
@@ -316,6 +580,24 @@ if menu == "管理者ダッシュボード":
         .properties(height=380)
     )
     st.altair_chart(chart, use_container_width=True)
+
+elif menu == "6月開始おすすめスケジュール":
+    st.header("6月開始おすすめスケジュール")
+    st.caption("監査で見られやすい項目を前半から消化し、冬と年度末に集中しない配置です。")
+
+    rec_df = pd.DataFrame(RECOMMENDED_SCHEDULE, columns=["予定日", "月", "研修テーマ", "担当者", "場所", "対象者", "メモ"])
+    st.dataframe(rec_df, use_container_width=True, hide_index=True, height=520)
+
+    st.info("登録すると、年間実施予定カレンダーに自動反映されます。既存予定を残す登録と、入れ替え登録を選べます。")
+    col1, col2 = st.columns(2)
+    if col1.button("おすすめスケジュールを追加登録する", type="primary"):
+        inserted, skipped = seed_recommended_schedule(overwrite=False)
+        st.success(f"追加登録しました。新規 {inserted} 件／重複スキップ {skipped} 件")
+        st.rerun()
+    if col2.button("既存予定を削除して、おすすめスケジュールに入れ替える"):
+        inserted, skipped = seed_recommended_schedule(overwrite=True)
+        st.warning(f"既存予定を入れ替えました。登録 {inserted} 件")
+        st.rerun()
 
 elif menu == "年間実施予定カレンダー":
     st.header("年間実施予定カレンダー")
@@ -347,14 +629,14 @@ elif menu == "研修予定登録":
 
         scheduled_date = ""
         if use_date:
-            year = 2026 if MONTH_NUM[scheduled_month] >= 4 else 2027
+            year = FISCAL_YEAR if MONTH_NUM[scheduled_month] >= 4 else FISCAL_YEAR + 1
             scheduled_date = st.date_input("予定日", value=date(year, MONTH_NUM[scheduled_month], 1)).isoformat()
 
         theme = st.selectbox("研修テーマ", themes)
         staff = st.text_input("担当者")
         place = st.text_input("場所・実施方法", placeholder="例：事務室／オンライン／フロア会議")
         target_staff = st.text_input("対象者", placeholder="例：全職員／夜勤者／新規採用者")
-        status = st.selectbox("状態", ["予定", "延期", "中止", "実施待ち"])
+        status = st.selectbox("状態", ["予定", "延期", "中止", "実施待ち", "実施済"])
         memo = st.text_area("メモ")
         submitted = st.form_submit_button("予定を登録する")
 
@@ -393,7 +675,7 @@ elif menu == "研修予定登録":
                 if use_date_edit:
                     default_date = pd.to_datetime(row.get("scheduled_date", ""), errors="coerce")
                     if pd.isna(default_date):
-                        year = 2026 if MONTH_NUM[new_month] >= 4 else 2027
+                        year = FISCAL_YEAR if MONTH_NUM[new_month] >= 4 else FISCAL_YEAR + 1
                         default_date = pd.Timestamp(date(year, MONTH_NUM[new_month], 1))
                     new_date = st.date_input("予定日", value=default_date.date(), key="edit_schedule_date").isoformat()
 
@@ -403,7 +685,7 @@ elif menu == "研修予定登録":
                 new_place = st.text_input("場所・実施方法", value=row.get("place", "") or "")
                 new_target = st.text_input("対象者", value=row.get("target_staff", "") or "")
 
-                status_options = ["予定", "延期", "中止", "実施待ち"]
+                status_options = ["予定", "延期", "中止", "実施待ち", "実施済"]
                 current_status = str(row.get("status", "") or "予定")
                 new_status = st.selectbox("状態", status_options, index=status_options.index(current_status) if current_status in status_options else 0)
                 new_memo = st.text_area("メモ", value=row.get("memo", "") or "")
@@ -426,6 +708,7 @@ elif menu == "研修予定登録":
 
 elif menu == "研修実施入力":
     st.header("研修実施入力")
+    st.caption("監査で確認されやすい、参加者・資料・写真・議事録リンクまで同時に残せます。")
     plan = get_plan()
     themes = plan["theme"].tolist()
 
@@ -433,16 +716,27 @@ elif menu == "研修実施入力":
         training_date = st.date_input("実施日", value=date.today())
         theme = st.selectbox("研修名", themes)
         staff = st.text_input("担当者")
-        participants = st.text_area("参加者")
-        record_link = st.text_input("研修記録リンク（Google Drive、PDF、写真URLなど）")
+        participants = st.text_area("参加者", placeholder="例：中丸、藤野、阿部、武井")
+        record_link = st.text_input("研修記録リンク（PDF、Google Drive、写真URLなど）")
+        material_link = st.text_input("研修資料リンク")
+        photo_link = st.text_input("写真・実施状況リンク")
+        committee_minutes_link = st.text_input("委員会議事録リンク")
+        absent_follow = st.text_area("欠席者・補講対応", placeholder="例：欠席者なし／〇〇職員は翌日資料確認")
+        evidence_status = st.selectbox("根拠書類の確認状況", ["未確認", "一部あり", "確認済", "要追加"])
         memo = st.text_area("備考・メモ")
+        mark_schedule_done = st.checkbox("同じ月の予定を『実施済』にする", value=True)
         submitted = st.form_submit_button("登録する")
 
     if submitted:
         execute_sql("""
-        INSERT INTO training_records(training_date, theme, staff, participants, record_link, memo, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (training_date.isoformat(), theme, staff, participants, record_link, memo, datetime.now().isoformat(timespec="seconds")))
+        INSERT INTO training_records(training_date, theme, staff, participants, record_link, memo, evidence_status, material_link, photo_link, committee_minutes_link, absent_follow, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            training_date.isoformat(), theme, staff, participants, record_link, memo, evidence_status,
+            material_link, photo_link, committee_minutes_link, absent_follow, datetime.now().isoformat(timespec="seconds")
+        ))
+        if mark_schedule_done:
+            update_schedule_status_after_record(theme, training_date.isoformat())
         st.success("研修記録を登録しました。")
 
 elif menu == "研修記録一覧・更新削除":
@@ -452,7 +746,8 @@ elif menu == "研修記録一覧・更新削除":
     if records.empty:
         st.info("まだ研修記録がありません。")
     else:
-        st.dataframe(records, use_container_width=True, hide_index=True)
+        display_df = records_for_display()
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
 
         st.subheader("記録の更新・削除")
         record_id = st.number_input("対象ID", min_value=1, step=1)
@@ -471,6 +766,13 @@ elif menu == "研修記録一覧・更新削除":
                 new_staff = st.text_input("担当者", value=row.get("staff", "") or "")
                 new_participants = st.text_area("参加者", value=row.get("participants", "") or "")
                 new_link = st.text_input("研修記録リンク", value=row.get("record_link", "") or "")
+                new_material = st.text_input("研修資料リンク", value=row.get("material_link", "") or "")
+                new_photo = st.text_input("写真・実施状況リンク", value=row.get("photo_link", "") or "")
+                new_minutes = st.text_input("委員会議事録リンク", value=row.get("committee_minutes_link", "") or "")
+                new_absent = st.text_area("欠席者・補講対応", value=row.get("absent_follow", "") or "")
+                evidence_options = ["未確認", "一部あり", "確認済", "要追加"]
+                current_evidence = str(row.get("evidence_status", "") or "未確認")
+                new_evidence = st.selectbox("根拠書類の確認状況", evidence_options, index=evidence_options.index(current_evidence) if current_evidence in evidence_options else 0)
                 new_memo = st.text_area("備考・メモ", value=row.get("memo", "") or "")
 
                 col1, col2 = st.columns(2)
@@ -480,36 +782,60 @@ elif menu == "研修記録一覧・更新削除":
             if update_btn:
                 execute_sql("""
                 UPDATE training_records
-                SET training_date=?, theme=?, staff=?, participants=?, record_link=?, memo=?
+                SET training_date=?, theme=?, staff=?, participants=?, record_link=?, memo=?, evidence_status=?, material_link=?, photo_link=?, committee_minutes_link=?, absent_follow=?
                 WHERE id=?
-                """, (new_date.isoformat(), new_theme, new_staff, new_participants, new_link, new_memo, int(record_id)))
+                """, (new_date.isoformat(), new_theme, new_staff, new_participants, new_link, new_memo, new_evidence, new_material, new_photo, new_minutes, new_absent, int(record_id)))
                 st.success("更新しました。")
 
             if delete_btn:
                 execute_sql("DELETE FROM training_records WHERE id=?", (int(record_id),))
                 st.warning("削除しました。")
 
+elif menu == "監査ファイル自動生成":
+    st.header("監査ファイル自動生成")
+    st.caption("年間予定・実施記録・不足確認・証拠書類チェックを1つのExcelにまとめます。")
+
+    st.subheader("監査確認サマリー")
+    st.dataframe(audit_check_df(), use_container_width=True, hide_index=True, height=420)
+
+    st.subheader("提出書類チェックリスト")
+    checklist = pd.DataFrame(AUDIT_CHECK_ITEMS, columns=["監査確認書類", "確認ポイント"])
+    checklist["保管状況"] = "□ 済　□ 未"
+    checklist["備考"] = ""
+    st.dataframe(checklist, use_container_width=True, hide_index=True)
+
+    excel_data = create_audit_excel()
+    st.download_button(
+        label="監査確認ファイルExcelをダウンロード",
+        data=excel_data,
+        file_name="年間研修_監査確認ファイル_2026年度.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary"
+    )
+
 elif menu == "研修計画管理":
     st.header("研修計画管理")
     plan = get_plan()
     st.dataframe(plan, use_container_width=True, hide_index=True)
+    st.info("この画面はマスタ確認用です。必要回数やテーマ名を変える場合は、TRAINING_MASTERを修正してください。")
 
 elif menu == "Excel出力":
     st.header("Excel出力")
+    st.caption("通常の管理用Excelです。監査用は『監査ファイル自動生成』から出力してください。")
 
-    output = Path("training_export.xlsx")
+    output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         monthly_schedule_matrix().to_excel(writer, sheet_name="年間予定表_月単位", index=False)
         schedule_list_df().to_excel(writer, sheet_name="予定一覧", index=False)
         progress_df().to_excel(writer, sheet_name="進捗一覧", index=False)
-        get_records().to_excel(writer, sheet_name="研修記録", index=False)
+        records_for_display().to_excel(writer, sheet_name="研修記録", index=False)
+    output.seek(0)
 
-    with open(output, "rb") as f:
-        st.download_button(
-            label="Excelをダウンロード",
-            data=f,
-            file_name="年間研修管理_月単位予定表.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+    st.download_button(
+        label="Excelをダウンロード",
+        data=output,
+        file_name="年間研修管理_月単位予定表.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
-st.caption("Ver1.4：古いDBが残っていても落ちない安定版。年間予定を月単位で表示します。")
+st.caption("Ver1.5：6月開始おすすめスケジュール、監査ファイル自動生成、根拠資料リンク管理を追加。")
