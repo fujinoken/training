@@ -720,10 +720,12 @@ def schedule_edit_ui(schedule, themes, key_prefix="schedule_edit"):
         new_date = ""
         if use_date_edit:
             default_date = pd.to_datetime(row.get("scheduled_date", ""), errors="coerce")
-            if pd.isna(default_date):
-                year = 2026 if MONTH_NUM[new_month] >= 4 else 2027
-                default_date = pd.Timestamp(date(year, MONTH_NUM[new_month], 1))
-            new_date = st.date_input("予定日", value=default_date.date(), key=f"{form_key}_date").isoformat()
+            target_year = 2026 if MONTH_NUM[new_month] >= 4 else 2027
+            target_month = MONTH_NUM[new_month]
+            if pd.isna(default_date) or default_date.month != target_month or default_date.year != target_year:
+                default_date = pd.Timestamp(date(target_year, target_month, 1))
+            # 予定月を変更したとき、日付欄もその月の1日に切り替わるようにする
+            new_date = st.date_input("予定日", value=default_date.date(), key=f"{form_key}_date_{new_month}").isoformat()
 
         current_theme = str(row.get("theme", "") or "")
         new_theme = st.selectbox("研修テーマ", themes, index=themes.index(current_theme) if current_theme in themes else 0, key=f"{form_key}_theme")
@@ -875,7 +877,15 @@ elif menu == "年間実施予定カレンダー":
     st.dataframe(matrix, use_container_width=True, hide_index=True, height=500)
 
     st.subheader("月別の予定一覧")
-    selected_month = st.selectbox("表示する月", MONTHS)
+    # 下の「変更・更新する予定」を選び直したとき、月別一覧の表示月もその予定月へ合わせる
+    current_edit_label = st.session_state.get("calendar_edit_select", "")
+    if current_edit_label and st.session_state.get("_last_calendar_edit_select") != current_edit_label:
+        parts = str(current_edit_label).split("｜")
+        if len(parts) >= 2 and parts[1] in MONTHS:
+            st.session_state["calendar_display_month"] = parts[1]
+        st.session_state["_last_calendar_edit_select"] = current_edit_label
+
+    selected_month = st.selectbox("表示する月", MONTHS, key="calendar_display_month")
     list_df = schedule_list_df()
     month_df = list_df[list_df["月"] == selected_month].drop(columns=["id"], errors="ignore")
 
