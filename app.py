@@ -12,7 +12,7 @@ from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 
 
-APP_TITLE = "2026 年間研修管理システム Ver1.8 詳細研修マスタ・委員会担当者対応版"
+APP_TITLE = "2026 年間研修管理システム Ver1.9 研修テーマ並び順変更対応版"
 DB_PATH = Path("training_management.db")
 UPLOAD_DIR = Path("training_uploads")
 CASE_DIR = UPLOAD_DIR / "case_materials"
@@ -106,7 +106,8 @@ def init_db():
         frequency TEXT,
         required_count INTEGER DEFAULT 1,
         responsible_person TEXT,
-        is_committee INTEGER DEFAULT 0
+        is_committee INTEGER DEFAULT 0,
+        sort_order INTEGER DEFAULT 0
     )
     """)
 
@@ -155,6 +156,7 @@ def init_db():
 
     add_column_if_missing(conn, "training_plan", "responsible_person", "TEXT")
     add_column_if_missing(conn, "training_plan", "is_committee", "INTEGER DEFAULT 0")
+    add_column_if_missing(conn, "training_plan", "sort_order", "INTEGER DEFAULT 0")
 
     for table, cols in {
         "training_schedule": [
@@ -201,16 +203,21 @@ def init_db():
         if old_theme not in current_master_themes:
             cur.execute("DELETE FROM training_plan WHERE theme=?", (old_theme,))
 
-    for theme, committee, frequency, required_count, is_committee in TRAINING_MASTER:
+    for sort_order, (theme, committee, frequency, required_count, is_committee) in enumerate(TRAINING_MASTER, start=1):
         cur.execute("""
-        INSERT INTO training_plan(theme, committee, frequency, required_count, is_committee)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO training_plan(theme, committee, frequency, required_count, is_committee, sort_order)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(theme) DO UPDATE SET
             committee=excluded.committee,
             frequency=excluded.frequency,
             required_count=excluded.required_count,
             is_committee=excluded.is_committee
-        """, (theme, committee, frequency, required_count, is_committee))
+        """, (theme, committee, frequency, required_count, is_committee, sort_order))
+
+    # 既存DBで並び順が未設定の行には、現在のID順で並び順を付与する
+    rows = cur.execute("SELECT id FROM training_plan WHERE sort_order IS NULL OR sort_order=0 ORDER BY id").fetchall()
+    for idx, (row_id,) in enumerate(rows, start=1):
+        cur.execute("UPDATE training_plan SET sort_order=? WHERE id=?", (idx, row_id))
 
     conn.commit()
     conn.close()
@@ -234,7 +241,7 @@ def execute_sql(query, params=(), return_lastrowid=False):
 
 
 def get_plan():
-    return read_sql("SELECT * FROM training_plan ORDER BY id")
+    return read_sql("SELECT * FROM training_plan ORDER BY sort_order ASC, id ASC")
 
 
 def get_records():
@@ -483,6 +490,63 @@ def format_japanese_date(date_text, month_text=""):
     if pd.isna(dt):
         return str(month_text or "")
     return f"{dt.month}/{dt.day}"
+
+
+
+def normalize_plan_sort_order():
+    """研修テーマの並び順を1,2,3...に整える。"""
+    conn = connect_db()
+    cur = conn.cursor()
+    rows = cur.execute("SELECT id FROM training_plan ORDER BY sort_order ASC, id ASC").fetchall()
+    for idx, (row_id,) in enumerate(rows, start=1):
+        cur.execute("UPDATE training_plan SET sort_order=? WHERE id=?", (idx, row_id))
+    conn.commit()
+    conn.close()
+
+
+def move_training_theme(target_id, direction):
+    """研修テーマを上下に移動する。direction=-1で上、1で下。"""
+    normalize_plan_sort_order()
+    plan = get_plan()
+    if plan.empty or target_id not in plan["id"].tolist():
+        return False
+
+    ids = plan["id"].tolist()
+    current_index = ids.index(target_id)
+    new_index = current_index + direction
+    if new_index < 0 or new_index >= len(ids):
+        return False
+
+    ids[current_index], ids[new_index] = ids[new_index], ids[current_index]
+
+    conn = connect_db()
+    cur = conn.cursor()
+    for idx, row_id in enumerate(ids, start=1):
+        cur.execute("UPDATE training_plan SET sort_order=? WHERE id=?", (idx, int(row_id)))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def set_training_theme_order(target_id, new_order):
+    """指定した研修テーマを任意の表示順へ移動する。"""
+    normalize_plan_sort_order()
+    plan = get_plan()
+    if plan.empty or target_id not in plan["id"].tolist():
+        return False
+
+    ids = plan["id"].tolist()
+    ids.remove(target_id)
+    insert_index = max(0, min(int(new_order) - 1, len(ids)))
+    ids.insert(insert_index, target_id)
+
+    conn = connect_db()
+    cur = conn.cursor()
+    for idx, row_id in enumerate(ids, start=1):
+        cur.execute("UPDATE training_plan SET sort_order=? WHERE id=?", (idx, int(row_id)))
+    conn.commit()
+    conn.close()
+    return True
 
 
 def create_printable_annual_calendar_excel():
@@ -1122,7 +1186,7 @@ elif menu == "監査ファイル自動生成":
 
 elif menu == "研修計画管理":
     st.header("研修計画管理")
-    st.caption("写真の年間研修表に合わせ、委員会・研修・訓練を分けて管理します。委員会形式の項目は担当者名を登録できます。")
+    st.caption("写真の年間研修表に合わせ、委員会・研修・訓練を分けて管理します。委員会形式の項目は担当者名を登録できます。研修テーマの表示順も変更できます。")
     plan = get_plan()
 
     view = plan.copy()
@@ -1130,6 +1194,9 @@ elif menu == "研修計画管理":
         view["is_committee"] = 0
     if "responsible_person" not in view.columns:
         view["responsible_person"] = ""
+    if "sort_order" not in view.columns:
+        view["sort_order"] = range(1, len(view) + 1)
+    view["表示順"] = view["sort_order"].fillna(0).astype(int)
     view["委員会形式"] = view["is_committee"].apply(lambda x: "対象" if int(x or 0) == 1 else "")
     view = view.rename(columns={
         "theme": "研修テーマ",
@@ -1138,8 +1205,37 @@ elif menu == "研修計画管理":
         "frequency": "頻度",
         "required_count": "必要回数"
     })
-    st.dataframe(view[["研修テーマ", "委員会", "担当者名", "頻度", "必要回数", "委員会形式"]], use_container_width=True, hide_index=True)
+    st.dataframe(view[["表示順", "研修テーマ", "委員会", "担当者名", "頻度", "必要回数", "委員会形式"]], use_container_width=True, hide_index=True)
 
+    st.subheader("研修テーマの並び順変更")
+    st.caption("ここで変更した順番は、管理者ダッシュボード、年間カレンダー、A4年間スケジュール、Excel出力に反映されます。")
+    if plan.empty:
+        st.info("並び順を変更できる研修テーマがありません。")
+    else:
+        order_options = []
+        for _, r in plan.iterrows():
+            label = f'{int(r.get("sort_order", 0) or 0)}｜{r["theme"]}'
+            order_options.append((label, int(r["id"])))
+        selected_order_label = st.selectbox("並び順を変更する研修テーマ", [x[0] for x in order_options], key="sort_select_theme")
+        selected_order_id = dict(order_options)[selected_order_label]
+        col_up, col_down, col_set = st.columns([1, 1, 2])
+        if col_up.button("上へ移動", key="move_up"):
+            if move_training_theme(selected_order_id, -1):
+                st.success("1つ上へ移動しました。画面を再読み込みすると反映されます。")
+            else:
+                st.info("これ以上上には移動できません。")
+        if col_down.button("下へ移動", key="move_down"):
+            if move_training_theme(selected_order_id, 1):
+                st.success("1つ下へ移動しました。画面を再読み込みすると反映されます。")
+            else:
+                st.info("これ以上下には移動できません。")
+        with col_set:
+            new_order = st.number_input("指定した順番へ移動", min_value=1, max_value=max(len(plan), 1), value=1, step=1, key="new_sort_order")
+            if st.button("この順番に移動", key="set_sort_order"):
+                if set_training_theme_order(selected_order_id, int(new_order)):
+                    st.success(f"{int(new_order)}番目へ移動しました。画面を再読み込みすると反映されます。")
+
+    st.divider()
     st.subheader("委員会担当者の登録・変更")
     committee_plan = plan[plan.get("is_committee", 0).fillna(0).astype(int) == 1].copy() if not plan.empty else pd.DataFrame()
     if committee_plan.empty:
