@@ -678,7 +678,10 @@ def create_printable_annual_calendar_excel():
 
 
 def schedule_edit_ui(schedule, themes, key_prefix="schedule_edit"):
-    """予定の変更・更新・削除を共通表示する。"""
+    """予定の変更・更新・削除を共通表示する。
+    Streamlitは同じkeyの入力値を保持するため、選択IDごとにフォーム部品のkeyを変える。
+    これにより、予定を選び直したときに月・日付・テーマ・担当者などが正しく切り替わる。
+    """
     if schedule.empty:
         st.info("更新・削除できる予定はまだありません。")
         return
@@ -704,14 +707,15 @@ def schedule_edit_ui(schedule, themes, key_prefix="schedule_edit"):
         return
 
     row = selected.iloc[0]
-    with st.form(f"{key_prefix}_form"):
+    form_key = f"{key_prefix}_{target_id}"
+    with st.form(f"{form_key}_form"):
         default_month = get_row_month(row)
         if default_month not in MONTHS:
             default_month = "4月"
 
-        new_month = st.selectbox("予定月", MONTHS, index=MONTHS.index(default_month), key=f"{key_prefix}_month")
+        new_month = st.selectbox("予定月", MONTHS, index=MONTHS.index(default_month), key=f"{form_key}_month")
         has_date = bool(str(row.get("scheduled_date", "") or "").strip())
-        use_date_edit = st.checkbox("具体的な予定日も入力する", value=has_date, key=f"{key_prefix}_use_date")
+        use_date_edit = st.checkbox("具体的な予定日も入力する", value=has_date, key=f"{form_key}_use_date")
 
         new_date = ""
         if use_date_edit:
@@ -719,18 +723,18 @@ def schedule_edit_ui(schedule, themes, key_prefix="schedule_edit"):
             if pd.isna(default_date):
                 year = 2026 if MONTH_NUM[new_month] >= 4 else 2027
                 default_date = pd.Timestamp(date(year, MONTH_NUM[new_month], 1))
-            new_date = st.date_input("予定日", value=default_date.date(), key=f"{key_prefix}_date").isoformat()
+            new_date = st.date_input("予定日", value=default_date.date(), key=f"{form_key}_date").isoformat()
 
         current_theme = str(row.get("theme", "") or "")
-        new_theme = st.selectbox("研修テーマ", themes, index=themes.index(current_theme) if current_theme in themes else 0, key=f"{key_prefix}_theme")
-        new_staff = st.text_input("担当者", value=row.get("staff", "") or "", key=f"{key_prefix}_staff")
-        new_place = st.text_input("場所・実施方法", value=row.get("place", "") or "", key=f"{key_prefix}_place")
-        new_target = st.text_input("対象者", value=row.get("target_staff", "") or "", key=f"{key_prefix}_target")
+        new_theme = st.selectbox("研修テーマ", themes, index=themes.index(current_theme) if current_theme in themes else 0, key=f"{form_key}_theme")
+        new_staff = st.text_input("担当者", value=row.get("staff", "") or "", key=f"{form_key}_staff")
+        new_place = st.text_input("場所・実施方法", value=row.get("place", "") or "", key=f"{form_key}_place")
+        new_target = st.text_input("対象者", value=row.get("target_staff", "") or "", key=f"{form_key}_target")
 
         status_options = ["予定", "延期", "中止", "実施待ち", "実施済"]
         current_status = str(row.get("status", "") or "予定")
-        new_status = st.selectbox("状態", status_options, index=status_options.index(current_status) if current_status in status_options else 0, key=f"{key_prefix}_status")
-        new_memo = st.text_area("メモ", value=row.get("memo", "") or "", key=f"{key_prefix}_memo")
+        new_status = st.selectbox("状態", status_options, index=status_options.index(current_status) if current_status in status_options else 0, key=f"{form_key}_status")
+        new_memo = st.text_area("メモ", value=row.get("memo", "") or "", key=f"{form_key}_memo")
 
         col1, col2 = st.columns(2)
         update_btn = col1.form_submit_button("更新する")
@@ -742,11 +746,13 @@ def schedule_edit_ui(schedule, themes, key_prefix="schedule_edit"):
         SET scheduled_date=?, scheduled_month=?, theme=?, staff=?, place=?, target_staff=?, status=?, memo=?
         WHERE id=?
         """, (new_date, new_month, new_theme, new_staff, new_place, new_target, new_status, new_memo, int(target_id)))
-        st.success("予定を更新しました。画面を再読み込みするとカレンダーに反映されます。")
+        st.success("予定を更新しました。")
+        st.rerun()
 
     if delete_btn:
         execute_sql("DELETE FROM training_schedule WHERE id=?", (int(target_id),))
-        st.warning("予定を削除しました。画面を再読み込みするとカレンダーに反映されます。")
+        st.warning("予定を削除しました。")
+        st.rerun()
 
 
 def create_audit_excel():
