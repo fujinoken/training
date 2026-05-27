@@ -12,7 +12,7 @@ from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 
 
-APP_TITLE = "2026 年間研修管理システム Ver1.7 監査ファイル・A4年間カレンダー対応版"
+APP_TITLE = "2026 年間研修管理システム Ver1.8 詳細研修マスタ・委員会担当者対応版"
 DB_PATH = Path("training_management.db")
 UPLOAD_DIR = Path("training_uploads")
 CASE_DIR = UPLOAD_DIR / "case_materials"
@@ -23,40 +23,52 @@ for p in [UPLOAD_DIR, CASE_DIR, REPORT_DIR, AUDIT_DIR]:
     p.mkdir(parents=True, exist_ok=True)
 
 TRAINING_MASTER = [
-    ("感染症の予防", "感染対策委員会", "年2回以上", 2),
-    ("身体拘束適正化", "身体拘束委員会", "年4回以上", 4),
-    ("虐待防止", "虐待防止委員会", "年4回以上", 4),
-    ("ハラスメント防止", "", "年2回以上", 2),
-    ("業務継続計画（感染症）", "", "研修・訓練 各2回以上", 2),
-    ("業務継続計画（自然災害）", "", "研修・訓練 各2回以上", 2),
-    ("事故防止", "", "年2回", 2),
-    ("認知症専門ケア研修", "", "年2回以上", 2),
-    ("避難訓練", "", "年2回", 2),
-    ("看取り", "", "年1回", 1),
-    ("運営推進会議", "", "年6回", 6),
+    # 写真の年間研修表に合わせ、委員会・研修・訓練を分けて管理する
+    # theme, committee, frequency, required_count, is_committee
+    ("感染症の予防｜感染対策委員会", "感染対策委員会", "年2回以上 対策検討委員会開催", 2, 1),
+    ("感染症の予防｜研修", "", "年1回以上研修・新規採用時研修", 1, 0),
+    ("感染症の予防｜訓練", "", "年1回以上の訓練", 1, 0),
+    ("身体拘束適正化｜委員会", "身体拘束の委員会", "年4回以上委員会開催", 4, 1),
+    ("身体拘束適正化｜研修", "", "年2回以上研修・新規採用時研修", 2, 0),
+    ("利用者の人権擁護、虐待防止｜委員会", "虐待防止委員会", "年4回以上委員会開催", 4, 1),
+    ("利用者の人権擁護、虐待防止｜研修", "", "年2回以上研修・新規採用時研修", 2, 0),
+    ("ハラスメント防止", "", "年2回以上研修・新規採用時研修", 2, 0),
+    ("業務計画の研修｜感染症研修", "感染症", "研修 年2回以上", 2, 0),
+    ("業務計画の研修｜感染症訓練", "感染症", "訓練 年2回以上", 2, 0),
+    ("業務計画の研修｜自然災害研修", "自然災害", "研修 年2回以上", 2, 0),
+    ("業務計画の研修｜自然災害訓練", "自然災害", "訓練 年2回以上", 2, 0),
+    ("事故防止", "", "年2回", 2, 0),
+    ("認知症専門ケア研修｜委員会", "", "年4回以上委員会開催", 4, 1),
+    ("認知症専門ケア研修｜研修", "", "年2回以上研修・新規採用時研修", 2, 0),
+    ("避難訓練", "", "年2回（防火実務研修 含む）", 2, 0),
+    ("看取り", "", "年1回", 1, 0),
+    ("運営推進会議", "", "年6回", 6, 0),
 ]
-
 MONTHS = ["4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月", "1月", "2月", "3月"]
 MONTH_NUM = {"4月":4, "5月":5, "6月":6, "7月":7, "8月":8, "9月":9, "10月":10, "11月":11, "12月":12, "1月":1, "2月":2, "3月":3}
 
 RECOMMENDED_SCHEDULE_6_START = [
-    ("6月", "2026-06-10", "感染症の予防", "感染対策委員会と連動。夏前に感染対策を確認。"),
+    ("6月", "2026-06-10", "感染症の予防｜感染対策委員会", "感染対策委員会。夏前に感染対策を確認。"),
     ("6月", "2026-06-24", "事故防止", "転倒・ヒヤリハット事例を使い、夜間対応も確認。"),
-    ("7月", "2026-07-15", "身体拘束適正化", "身体拘束委員会と連動。不適切ケアのグレー事例を確認。"),
-    ("8月", "2026-08-12", "業務継続計画（感染症）", "感染症流行期前にBCPの動きを確認。"),
-    ("9月", "2026-09-16", "虐待防止", "声かけ・不適切ケア・心理的虐待の事例検討。"),
-    ("10月", "2026-10-07", "認知症専門ケア研修", "認知症の方への声かけ・不安軽減の支援。"),
+    ("7月", "2026-07-08", "感染症の予防｜研修", "感染症予防の基本確認。新規採用時研修にも使用可能。"),
+    ("7月", "2026-07-22", "身体拘束適正化｜委員会", "身体拘束委員会。不適切ケアのグレー事例を確認。"),
+    ("8月", "2026-08-12", "業務計画の研修｜感染症研修", "感染症BCP研修。流行期前に役割を確認。"),
+    ("8月", "2026-08-26", "業務計画の研修｜感染症訓練", "感染症BCP訓練。発生時の動きを確認。"),
+    ("9月", "2026-09-09", "利用者の人権擁護、虐待防止｜委員会", "虐待防止委員会。声かけ・不適切ケアを確認。"),
+    ("9月", "2026-09-23", "利用者の人権擁護、虐待防止｜研修", "心理的虐待・不適切ケアの事例検討。"),
+    ("10月", "2026-10-07", "認知症専門ケア研修｜委員会", "認知症ケアの委員会。支援方針の確認。"),
     ("10月", "2026-10-21", "避難訓練", "秋の避難訓練。夜間想定も確認。"),
     ("11月", "2026-11-11", "ハラスメント防止", "職員間・利用者家族対応の基本確認。"),
-    ("12月", "2026-12-09", "感染症の予防", "冬の感染症流行前の再確認。"),
-    ("1月", "2027-01-13", "身体拘束適正化", "年度後半の振り返り。"),
-    ("1月", "2027-01-27", "虐待防止", "不適切ケア防止の再確認。"),
-    ("2月", "2027-02-10", "業務継続計画（自然災害）", "自然災害BCPと備蓄・連絡体制確認。"),
-    ("2月", "2027-02-24", "避難訓練", "年度内2回目の避難訓練。"),
+    ("11月", "2026-11-25", "身体拘束適正化｜研修", "身体拘束適正化研修。新規採用時研修にも使用可能。"),
+    ("12月", "2026-12-09", "感染症の予防｜感染対策委員会", "冬の感染症流行前の再確認。"),
+    ("12月", "2026-12-23", "感染症の予防｜訓練", "感染症発生時の訓練。"),
+    ("1月", "2027-01-13", "身体拘束適正化｜委員会", "年度後半の振り返り。"),
+    ("1月", "2027-01-27", "利用者の人権擁護、虐待防止｜委員会", "虐待防止の再確認。"),
+    ("2月", "2027-02-10", "業務計画の研修｜自然災害研修", "自然災害BCPと備蓄・連絡体制確認。"),
+    ("2月", "2027-02-24", "業務計画の研修｜自然災害訓練", "自然災害BCP訓練。避難・連絡体制を確認。"),
     ("3月", "2027-03-10", "看取り", "看取り期の本人・家族支援の基本確認。"),
-    ("3月", "2027-03-24", "認知症専門ケア研修", "認知症ケアの年度末振り返り。"),
+    ("3月", "2027-03-24", "認知症専門ケア研修｜研修", "認知症ケアの年度末振り返り。"),
 ]
-
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 
@@ -92,7 +104,9 @@ def init_db():
         theme TEXT UNIQUE,
         committee TEXT,
         frequency TEXT,
-        required_count INTEGER DEFAULT 1
+        required_count INTEGER DEFAULT 1,
+        responsible_person TEXT,
+        is_committee INTEGER DEFAULT 0
     )
     """)
 
@@ -139,6 +153,9 @@ def init_db():
     )
     """)
 
+    add_column_if_missing(conn, "training_plan", "responsible_person", "TEXT")
+    add_column_if_missing(conn, "training_plan", "is_committee", "INTEGER DEFAULT 0")
+
     for table, cols in {
         "training_schedule": [
             ("scheduled_date", "TEXT"),
@@ -175,11 +192,25 @@ def init_db():
         for col, typ in cols:
             add_column_if_missing(conn, table, col, typ)
 
-    for theme, committee, frequency, required_count in TRAINING_MASTER:
+    current_master_themes = [x[0] for x in TRAINING_MASTER]
+    replaced_old_themes = [
+        "感染症の予防", "身体拘束適正化", "虐待防止", "業務継続計画（感染症）",
+        "業務継続計画（自然災害）", "認知症専門ケア研修"
+    ]
+    for old_theme in replaced_old_themes:
+        if old_theme not in current_master_themes:
+            cur.execute("DELETE FROM training_plan WHERE theme=?", (old_theme,))
+
+    for theme, committee, frequency, required_count, is_committee in TRAINING_MASTER:
         cur.execute("""
-        INSERT OR IGNORE INTO training_plan(theme, committee, frequency, required_count)
-        VALUES (?, ?, ?, ?)
-        """, (theme, committee, frequency, required_count))
+        INSERT INTO training_plan(theme, committee, frequency, required_count, is_committee)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(theme) DO UPDATE SET
+            committee=excluded.committee,
+            frequency=excluded.frequency,
+            required_count=excluded.required_count,
+            is_committee=excluded.is_committee
+        """, (theme, committee, frequency, required_count, is_committee))
 
     conn.commit()
     conn.close()
@@ -256,8 +287,15 @@ def monthly_schedule_matrix():
     plan = get_plan()
     schedule = get_schedule()
 
-    matrix = plan[["theme", "committee", "frequency", "required_count"]].copy()
-    matrix.columns = ["研修テーマ", "委員会", "頻度", "年間必要回数"]
+    plan_view = plan.copy()
+    if "responsible_person" not in plan_view.columns:
+        plan_view["responsible_person"] = ""
+    plan_view["committee_display"] = plan_view.apply(
+        lambda r: (str(r.get("committee", "") or "") + (f"\n担当：{str(r.get('responsible_person', '')).strip()}" if str(r.get("responsible_person", "") or "").strip() else "")).strip(),
+        axis=1
+    )
+    matrix = plan_view[["theme", "committee_display", "frequency", "required_count"]].copy()
+    matrix.columns = ["研修テーマ", "委員会（担当者名）", "頻度", "年間必要回数"]
 
     for m in MONTHS:
         matrix[m] = ""
@@ -494,7 +532,7 @@ def create_printable_annual_calendar_excel():
     ws["A2"].alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[2].height = 18
 
-    headers = ["研修テーマ", "委員会", "必要"] + MONTHS + ["進捗"]
+    headers = ["研修テーマ", "委員会\n担当者", "必要"] + MONTHS + ["進捗"]
     for col_idx, h in enumerate(headers, start=1):
         cell = ws.cell(row=3, column=col_idx, value=h)
         cell.font = Font(size=9, bold=True, color="1F1F1F")
@@ -527,7 +565,11 @@ def create_printable_annual_calendar_excel():
     start_row = 4
     for r_idx, (_, p) in enumerate(plan.iterrows(), start=start_row):
         theme = str(p["theme"])
-        values = [theme, str(p.get("committee", "") or ""), int(p.get("required_count", 0))]
+        committee_text = str(p.get("committee", "") or "")
+        responsible_text = str(p.get("responsible_person", "") or "").strip()
+        if responsible_text:
+            committee_text = (committee_text + "\n担当：" + responsible_text).strip()
+        values = [theme, committee_text, int(p.get("required_count", 0))]
         for m in MONTHS:
             values.append("\n---\n".join(sched_map.get((theme, m), [])))
         values.append(progress_map.get(theme, f'0/{int(p.get("required_count", 0))}'))
@@ -729,8 +771,10 @@ if menu == "管理者ダッシュボード":
     st.dataframe(audit_checklist_df(), use_container_width=True, hide_index=True)
 
     st.subheader("研修進捗一覧")
-    view = df[["theme", "committee", "frequency", "required_count", "done_count", "remaining", "rate", "状況"]].copy()
-    view.columns = ["研修テーマ", "委員会", "頻度", "必要回数", "実施数", "残り", "実施率", "状況"]
+    if "responsible_person" not in df.columns:
+        df["responsible_person"] = ""
+    view = df[["theme", "committee", "responsible_person", "frequency", "required_count", "done_count", "remaining", "rate", "状況"]].copy()
+    view.columns = ["研修テーマ", "委員会", "担当者名", "頻度", "必要回数", "実施数", "残り", "実施率", "状況"]
     st.dataframe(
         view,
         use_container_width=True,
@@ -1078,8 +1122,39 @@ elif menu == "監査ファイル自動生成":
 
 elif menu == "研修計画管理":
     st.header("研修計画管理")
+    st.caption("写真の年間研修表に合わせ、委員会・研修・訓練を分けて管理します。委員会形式の項目は担当者名を登録できます。")
     plan = get_plan()
-    st.dataframe(plan, use_container_width=True, hide_index=True)
+
+    view = plan.copy()
+    if "is_committee" not in view.columns:
+        view["is_committee"] = 0
+    if "responsible_person" not in view.columns:
+        view["responsible_person"] = ""
+    view["委員会形式"] = view["is_committee"].apply(lambda x: "対象" if int(x or 0) == 1 else "")
+    view = view.rename(columns={
+        "theme": "研修テーマ",
+        "committee": "委員会",
+        "responsible_person": "担当者名",
+        "frequency": "頻度",
+        "required_count": "必要回数"
+    })
+    st.dataframe(view[["研修テーマ", "委員会", "担当者名", "頻度", "必要回数", "委員会形式"]], use_container_width=True, hide_index=True)
+
+    st.subheader("委員会担当者の登録・変更")
+    committee_plan = plan[plan.get("is_committee", 0).fillna(0).astype(int) == 1].copy() if not plan.empty else pd.DataFrame()
+    if committee_plan.empty:
+        st.info("担当者を入力できる委員会形式の項目がありません。")
+    else:
+        options = committee_plan["theme"].tolist()
+        selected_theme = st.selectbox("担当者を設定する委員会項目", options)
+        selected_row = committee_plan[committee_plan["theme"] == selected_theme].iloc[0]
+        with st.form("committee_responsible_form"):
+            new_committee = st.text_input("委員会名", value=selected_row.get("committee", "") or "")
+            new_responsible = st.text_input("担当者名", value=selected_row.get("responsible_person", "") or "", placeholder="例：渕本／管理者／感染対策担当")
+            submitted = st.form_submit_button("担当者を保存する")
+        if submitted:
+            execute_sql("UPDATE training_plan SET committee=?, responsible_person=? WHERE theme=?", (new_committee, new_responsible, selected_theme))
+            st.success("委員会名・担当者名を保存しました。年間予定表とA4印刷にも反映されます。")
 
 elif menu == "Excel出力":
     st.header("Excel出力")
@@ -1103,4 +1178,4 @@ elif menu == "Excel出力":
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-st.caption("Ver1.7：年間実施予定カレンダー画面での予定変更・更新、A4横1枚の年間スケジュール印刷Excelに対応。")
+st.caption("Ver1.8：写真の年間研修表に合わせ、委員会・研修・訓練を分割管理。委員会形式の項目に担当者名を登録可能。")
