@@ -12,7 +12,7 @@ from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 
 
-APP_TITLE = "2026 年間研修管理システム Ver1.9 研修テーマ並び順変更対応版"
+APP_TITLE = "2026 年間研修管理システム Ver1.9.3 予定月自動反映対応版"
 DB_PATH = Path("training_management.db")
 UPLOAD_DIR = Path("training_uploads")
 CASE_DIR = UPLOAD_DIR / "case_materials"
@@ -271,6 +271,19 @@ def get_row_month(row):
     if pd.isna(dt):
         return ""
     return f"{dt.month}月"
+
+
+def month_from_date_or_selected(date_text, selected_month=""):
+    """予定日が入力されている場合は、日付から予定月を自動判定する。
+    例：予定日が2026-07-10なら、予定月は7月として保存する。
+    """
+    dt = pd.to_datetime(date_text, errors="coerce")
+    if not pd.isna(dt):
+        detected_month = f"{dt.month}月"
+        if detected_month in MONTHS:
+            return detected_month
+    selected_month = str(selected_month or "").strip()
+    return selected_month if selected_month in MONTHS else ""
 
 
 def progress_df():
@@ -743,12 +756,13 @@ def schedule_edit_ui(schedule, themes, key_prefix="schedule_edit"):
         delete_btn = col2.form_submit_button("削除する")
 
     if update_btn:
+        final_month = month_from_date_or_selected(new_date, new_month)
         execute_sql("""
         UPDATE training_schedule
         SET scheduled_date=?, scheduled_month=?, theme=?, staff=?, place=?, target_staff=?, status=?, memo=?
         WHERE id=?
-        """, (new_date, new_month, new_theme, new_staff, new_place, new_target, new_status, new_memo, int(target_id)))
-        st.success("予定を更新しました。")
+        """, (new_date, final_month, new_theme, new_staff, new_place, new_target, new_status, new_memo, int(target_id)))
+        st.success(f"予定を更新しました。表示月も「{final_month}」に反映しました。")
         st.rerun()
 
     if delete_btn:
@@ -954,11 +968,12 @@ elif menu == "研修予定登録":
         submitted = st.form_submit_button("予定を登録する")
 
     if submitted:
+        final_month = month_from_date_or_selected(scheduled_date, scheduled_month)
         execute_sql("""
         INSERT INTO training_schedule(scheduled_date, scheduled_month, theme, staff, place, target_staff, memo, status, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (scheduled_date, scheduled_month, theme, staff, place, target_staff, memo, status, datetime.now().isoformat(timespec="seconds")))
-        st.success("研修予定を登録しました。")
+        """, (scheduled_date, final_month, theme, staff, place, target_staff, memo, status, datetime.now().isoformat(timespec="seconds")))
+        st.success(f"研修予定を登録しました。予定月は「{final_month}」で保存しました。")
 
     st.subheader("予定の更新・削除")
     schedule = get_schedule()
@@ -1008,12 +1023,14 @@ elif menu == "研修予定登録":
                 delete_btn = col2.form_submit_button("削除する")
 
             if update_btn:
+                final_month = month_from_date_or_selected(new_date, new_month)
                 execute_sql("""
                 UPDATE training_schedule
                 SET scheduled_date=?, scheduled_month=?, theme=?, staff=?, place=?, target_staff=?, status=?, memo=?
                 WHERE id=?
-                """, (new_date, new_month, new_theme, new_staff, new_place, new_target, new_status, new_memo, int(target_id)))
-                st.success("予定を更新しました。")
+                """, (new_date, final_month, new_theme, new_staff, new_place, new_target, new_status, new_memo, int(target_id)))
+                st.success(f"予定を更新しました。表示月も「{final_month}」に反映しました。")
+                st.rerun()
 
             if delete_btn:
                 execute_sql("DELETE FROM training_schedule WHERE id=?", (int(target_id),))
@@ -1290,4 +1307,4 @@ elif menu == "Excel出力":
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-st.caption("Ver1.8：写真の年間研修表に合わせ、委員会・研修・訓練を分割管理。委員会形式の項目に担当者名を登録可能。")
+st.caption("Ver1.9.3：予定日を変更した場合、予定月も日付に合わせて自動更新。研修テーマ並び順変更にも対応。")
